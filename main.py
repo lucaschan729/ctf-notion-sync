@@ -22,6 +22,7 @@ NAVY = "1F4E78"
 TYPE_COLORS = {"週年紅利": "1F4E78", "終期紅利": "C55A11", "復歸紅利": "548235",
                "終期分紅": "7F6000", "特別紅利": "833C0B"}
 YEAR = re.compile(r"^\s*(\d{1,2}\+?)\s*[（(]\s*([^）)]*)")
+SEP = r"\s*[-–—－]\s*"
 KIND_LABEL = {"tcv": "總現金價值比率", "div": "分紅實現率"}
 DESC = {
     "tcv": "總現金價值比率＝實際總現金價值 ÷ 銷售時說明的總現金價值。100% 即與銷售時一致，高於 100% 即比銷售時多。定義以周大福人壽網站的說明為準。",
@@ -83,10 +84,10 @@ def grid(table):
 
 
 def parse_title(t):
-    parts = [p.strip() for p in re.split(r"\s*[–—－]\s*|\s+-\s+", t) if p.strip()]
-    for i in range(1, len(parts)):
-        if re.search(r"保險$|^分紅|^萬用", parts[i]) and "」" not in parts[i]:
-            return " – ".join(parts[:i]), parts[i]
+    for m in re.finditer(SEP, t):
+        seg = re.split(SEP, t[m.end():])[0].strip()
+        if seg and "」" not in seg and re.search(r"^分紅|^萬用|保險$", seg):
+            return t[:m.start()].strip(), seg
     return t.strip(), ""
 
 
@@ -151,6 +152,12 @@ def parse_page(raw, years, seen, st):
                 st["notes"] += 1
                 continue
             typ = r[0] if first >= 1 else ""
+            if typ.startswith(("*", "＊")) or len(typ) > 10:
+                st["notes"] += 1
+                continue
+            if "保單價值" in typ:
+                st["pv"] += 1
+                continue
             cur = r[first - 1] if first >= 2 else ""
             vals = {}
             for i, lab in colmap.items():
@@ -392,6 +399,7 @@ def build_excel(sheets, years, year, path):
     for t in ["・點上方「資料概況」的工作表名稱，可直接跳到該工作表。",
               "・產品數按產品名稱計算，同名產品只算一次。",
               "・「保單年度10+」一欄即周大福網站的「11+（2014或之前）」。",
+              "・網站上的「保單價值」行不屬於紅利，沒有列入。",
               "・每個工作表第 5 行有篩選箭嘴，可按產品種類、貨幣或紅利類型篩選。",
               "・產品之間有淺藍色分隔行；排序會打亂分隔行，建議只用篩選。",
               "・向右或向下捲動時，標題列和產品名稱會固定不動。",
@@ -513,7 +521,8 @@ def report(label, recs, by_type):
 
 def main():
     recs, years, seen = [], {}, set()
-    st = {"tables": 0, "dups": 0, "notitle": 0, "notes": 0, "words": Counter(), "ryear": Counter()}
+    st = {"tables": 0, "dups": 0, "notitle": 0, "notes": 0, "pv": 0,
+          "words": Counter(), "ryear": Counter()}
     print("=== 讀取 ===")
     for url in PAGES:
         try:
@@ -543,9 +552,11 @@ def main():
         print(f"  {p['name']}｜{p['cat'] or '未識別種類'}｜"
               f"{a['rows'] if a else 0}/{len(a['vals']) if a else 0}｜{b['rows'] if b else 0}/{len(b['vals']) if b else 0}")
     print("=== 核對 ===")
-    print(f"報告年度 {year}｜年度表 {st['tables']} 個｜略過重複表格 {st['dups']} 個｜沒有標題的表 {st['notitle']} 個｜略過備註行 {st['notes']} 行")
-    print(f"資料行 {len(recs)}｜數值格 {len(numbers(recs))}｜未識別種類的產品 "
-          f"{sum(1 for p in products(recs) if not p['cat'])} 個")
+    print(f"報告年度 {year}｜年度表 {st['tables']} 個｜略過重複表格 {st['dups']} 個｜沒有標題的表 {st['notitle']} 個")
+    print(f"略過備註行 {st['notes']} 行｜剔除保單價值 {st['pv']} 行")
+    none = [p["name"] for p in products(recs) if not p["cat"]]
+    print(f"資料行 {len(recs)}｜數值格 {len(numbers(recs))}｜未識別種類的產品 {len(none)} 個" +
+          ("｜" + "、".join(none[:10]) if none else ""))
     print("年份欄：" + "｜".join(f"{lab}={years.get(lab, '?')}" for lab in LABELS))
     print("沒有數字的格：" + "｜".join(f"{k}×{v}" for k, v in st["words"].most_common(12)))
     if tcv:
